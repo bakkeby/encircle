@@ -1,0 +1,64 @@
+.TH ENCIRCLE 1 encircle\-VERSION
+.SH NAME
+encircle \- a Xinerama X cursor monitor wrapper
+.SH SYNOPSIS
+.B dwm
+.RB [ \-hvfxys ]
+.SH DESCRIPTION
+encircle is a window manager agnostic tool that wraps your X cursor around the
+edges of the screen and is specifically designed to work with asymmetric
+multi-monitor Xinerama setups.
+.P
+In practice what this means is that the screen area is turned into a flat
+torus in that when the cursor hits a screen edge then it will continue and
+reappear on the opposite edge.
+
+If the cursor position is not within the target screen then the cursor will
+snap to the nearest edge of that screen.
+
+By default cursor wrapping is enabled on both horizontal and vertical axes.
+
+   ┌───────┐
+   │     1┄┤
+   │       │┌───────────────^─┐┌───────┐
+   │       │├┄1┄>           4 ││       │
+   │       ││                 ││       │
+   │   A   ││        B        ││   C   │
+   │       ││                 ││       │
+   ├┄2     │├┄3┄>             ││   <┄2┄┤
+   │       │└───────────────^─┘│       │
+   │     3┄┤                   │       │
+   └───────┘                   └───────┘
+
+In the above example we have four transitions:
+   1) snaps to the adjacent monitor (rather than hitting a hard wall)
+   2) wraps the cursor from monitor A to monitor C which is the rightmost monitor
+   3) snaps to the adjacent monitor (rather than hitting a hard wall)
+   4) wraps around monitor B because there is no other monitor above or below
+
+If the monitor arrangement is changed (e.g. using xrandr) then encircle will be
+notified of that and update monitor positions and dimensions accordingly.
+
+.SH OPTIONS
+.TP
+.B \-h
+prints help output
+.TP
+.B \-v
+prints version information and exits
+.TP
+.B \-f
+fork the process run in the background
+.TP
+.B \-x
+enable cursor wrapping on the x-axis
+.TP
+.B \-y
+enable cursor wrapping on the y-axis
+.TP
+.B \-s
+snap only - disables wrapping across outer screen edges
+.P
+In the aforementioned example this would disable transition 2) and 4), leaving only
+the transitions that are internal within the screen area. This can be useful if the
+snapping behaviour to avoid hard edges is desired, but cursor wrapping is not.
