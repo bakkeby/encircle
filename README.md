@@ -45,6 +45,8 @@ $ sudo make install
 $ encircle
 ```
 
+This is also available in the [AUR](https://aur.archlinux.org/packages/encircle).
+
 ## Dependencies
 
 ### Arch
