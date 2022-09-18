@@ -8,6 +8,7 @@
 #include <limits.h>
 #include <unistd.h>
 #include <X11/X.h>
+#include <X11/extensions/Xfixes.h>
 #include <X11/extensions/XInput2.h>
 #ifdef XINERAMA
 #include <X11/extensions/Xinerama.h>
@@ -31,29 +32,35 @@ struct Monitor {
 	Monitor *next;
 };
 
+static Monitor *above(Monitor *m, int x);
+static Monitor *below(Monitor *m, int x);
 static void cleanup(void);
 static void cleanupmon(Monitor *mon);
 static void configurenotify(XEvent *e);
 static Monitor *createmon(void);
-static Monitor *leftof(Monitor *m, int y);
-static Monitor *above(Monitor *m, int x);
-static Monitor *rightof(Monitor *m, int y);
-static Monitor *below(Monitor *m, int x);
-static Monitor *recttomon(int x, int y, int w, int h);
 static void genericevent(XEvent *e);
+static int getrootptr(int *x, int *y);
+static void hide_cursor(void);
 #ifdef XINERAMA
 static int isuniquegeom(XineramaScreenInfo *unique, size_t n, XineramaScreenInfo *info);
+static Monitor *leftof(Monitor *m, int y);
 #endif /* XINERAMA */
-static void run(void);
 static void quit(int unused);
+static void rawmotion(XEvent *e);
+static Monitor *recttomon(int x, int y, int w, int h);
+static Monitor *rightof(Monitor *m, int y);
+static void run(void);
 static void setup(void);
+static void show_cursor(void);
 static void updategeom(int width, int height);
 static void usage(void);
 
 static volatile int running = 1;
 static int wrap_x = 0; /* allow monitor wrap on the x-axis */
 static int wrap_y = 0; /* allow monitor wrap on the y-axis */
+static int banish = 0; /* hide cursor while typing */
 static int snap_only = 0;
+static int cursor_hidden = 0;
 static int snap_offset = 10; /* snap offset, the number of pixels to shift cursor when snapping */
 static int px, py; /* previous cursor x and y position */
 static int screen;
@@ -65,98 +72,6 @@ static void (*handler[LASTEvent]) (XEvent *) = {
 	[ConfigureNotify] = configurenotify,
 	[GenericEvent] = genericevent,
 };
-
-void
-cleanup(void)
-{
-	while (mons)
-		cleanupmon(mons);
-}
-
-void
-cleanupmon(Monitor *mon)
-{
-	Monitor *m;
-
-	if (mon == mons)
-		mons = mons->next;
-	else {
-		for (m = mons; m && m->next != mon; m = m->next);
-		m->next = mon->next;
-	}
-
-	free(mon);
-}
-
-void
-configurenotify(XEvent *e)
-{
-	XConfigureEvent *ev = &e->xconfigure;
-
-	if (ev->window != root)
-		return;
-
-	updategeom(ev->width, ev->height);
-}
-
-void
-genericevent(XEvent *e)
-{
-	int x, y, dx, dy, nx, ny;
-	int di;
-	unsigned int dui;
-	Window dummy;
-	Monitor *m = NULL, *o;
-
-	if (e->xcookie.extension != xi_opcode)
-		return;
-
-	if (!XGetEventData(dpy, &e->xcookie))
-		return;
-
-	/* On each RawMotion event, retrieve the pointer location and move the pointer if necessary. */
-	if (e->xcookie.evtype != XI_RawMotion)
-		goto bail;
-
-	if (!XQueryPointer(dpy, root, &dummy, &dummy, &x, &y, &di, &di, &dui))
-		goto bail;
-
-	if (!(o = recttomon(x, y, 1, 1)))
-		goto bail;
-
-	dx = x - px;
-	dy = y - py;
-	nx = x;
-	ny = y;
-
-	if (y == o->my && dy < 0) {
-		if (wrap_y && (m = above(o, x)))
-			ny = m->my + m->mh - 2;
-	} else if (y == o->my + o->mh - 1 && dy > 0) {
-		if (wrap_y && (m = below(o, x)))
-			ny = m->my + 1;
-	} else if (x == o->mx && dx < 0) {
-		if (wrap_x && (m = leftof(o, y)))
-			nx = m->mx + m->mw - 2;
-	} else if (x == o->mx + o->mw - 1 && dx > 0) {
-		if (wrap_x && (m = rightof(o, y)))
-			nx = m->mx + 1;
-	}
-
-	if (nx != x || ny != y) {
-		if (m != o && nx == x)
-			nx = SNAP(x, m->mx, m->mw);
-		if (m != o && ny == y)
-			ny = SNAP(y, m->my, m->mh);
-		XWarpPointer(dpy, None, root, 0, 0, 0, 0, nx, ny);
-	}
-
-	px = nx;
-	py = ny;
-
-bail:
-	XFreeEventData(dpy, &e->xcookie);
-}
 
 Monitor *
 above(Monitor *o, int x)
@@ -198,6 +113,102 @@ below(Monitor *o, int x)
 	return r;
 }
 
+void
+cleanup(void)
+{
+	show_cursor();
+	while (mons)
+		cleanupmon(mons);
+}
+
+void
+cleanupmon(Monitor *mon)
+{
+	Monitor *m;
+
+	if (mon == mons)
+		mons = mons->next;
+	else {
+		for (m = mons; m && m->next != mon; m = m->next);
+		m->next = mon->next;
+	}
+
+	free(mon);
+}
+
+void
+configurenotify(XEvent *e)
+{
+	XConfigureEvent *ev = &e->xconfigure;
+
+	if (ev->window != root)
+		return;
+
+	updategeom(ev->width, ev->height);
+}
+
+Monitor *
+createmon(void)
+{
+	return ecalloc(1, sizeof(Monitor));
+}
+
+int
+getrootptr(int *x, int *y)
+{
+    int di;
+    unsigned int dui;
+    Window dummy;
+
+    return XQueryPointer(dpy, root, &dummy, &dummy, x, y, &di, &di, &dui);
+}
+
+void
+genericevent(XEvent *e)
+{
+	if (e->xcookie.extension != xi_opcode)
+		return;
+
+	if (!XGetEventData(dpy, &e->xcookie))
+		return;
+
+	switch (e->xcookie.evtype) {
+	case XI_RawMotion:
+		show_cursor();
+		rawmotion(e);
+		break;
+	case XI_RawTouchBegin:
+	case XI_RawTouchEnd:
+	case XI_RawTouchUpdate:
+	case XI_RawKeyPress:
+		hide_cursor();
+		break;
+	}
+
+	XFreeEventData(dpy, &e->xcookie);
+}
+
+void
+hide_cursor(void)
+{
+	if (!banish || cursor_hidden)
+		return;
+	XFixesHideCursor(dpy, root);
+	cursor_hidden = 1;
+}
+
+#ifdef XINERAMA
+int
+isuniquegeom(XineramaScreenInfo *unique, size_t n, XineramaScreenInfo *info)
+{
+	while (n--)
+		if (unique[n].x_org == info->x_org && unique[n].y_org == info->y_org
+		&& unique[n].width == info->width && unique[n].height == info->height)
+			return 0;
+	return 1;
+}
+#endif /* XINERAMA */
+
 Monitor *
 leftof(Monitor *o, int y)
 {
@@ -216,6 +227,55 @@ leftof(Monitor *o, int y)
 	}
 
 	return r;
+}
+
+void
+quit(int unused)
+{
+	running = 0;
+}
+
+void
+rawmotion(XEvent *e)
+{
+	int x, y, dx, dy, nx, ny;
+	Monitor *m = NULL, *o;
+
+	if (!getrootptr(&x, &y))
+		return;
+
+	if (!(o = recttomon(x, y, 1, 1)))
+		return;
+
+	dx = x - px;
+	dy = y - py;
+	nx = x;
+	ny = y;
+
+	if (y == o->my && dy < 0) {
+		if (wrap_y && (m = above(o, x)))
+			ny = m->my + m->mh - 2;
+	} else if (y == o->my + o->mh - 1 && dy > 0) {
+		if (wrap_y && (m = below(o, x)))
+			ny = m->my + 1;
+	} else if (x == o->mx && dx < 0) {
+		if (wrap_x && (m = leftof(o, y)))
+			nx = m->mx + m->mw - 2;
+	} else if (x == o->mx + o->mw - 1 && dx > 0) {
+		if (wrap_x && (m = rightof(o, y)))
+			nx = m->mx + 1;
+	}
+
+	if (nx != x || ny != y) {
+		if (m != o && nx == x)
+			nx = SNAP(x, m->mx, m->mw);
+		if (m != o && ny == y)
+			ny = SNAP(y, m->my, m->mh);
+		XWarpPointer(dpy, None, root, 0, 0, 0, 0, nx, ny);
+	}
+
+	px = nx;
+	py = ny;
 }
 
 Monitor *
@@ -238,34 +298,19 @@ rightof(Monitor *o, int y)
 	return r;
 }
 
-Monitor *
-createmon(void)
-{
-	return ecalloc(1, sizeof(Monitor));
-}
-
-#ifdef XINERAMA
-int
-isuniquegeom(XineramaScreenInfo *unique, size_t n, XineramaScreenInfo *info)
-{
-	while (n--)
-		if (unique[n].x_org == info->x_org && unique[n].y_org == info->y_org
-		&& unique[n].width == info->width && unique[n].height == info->height)
-			return 0;
-	return 1;
-}
-#endif /* XINERAMA */
-
 void
 run(void)
 {
 	XEvent ev;
 
-	/* Tell XInput to send us all RawMotion events.
-	 * (Normal Motion events are blocked by some windows.) */
-	unsigned char mask_bytes[XIMaskLen(XI_RawMotion)];
+	/* Tell XInput to send us all RawMotion events. */
+	unsigned char mask_bytes[XIMaskLen(XI_LASTEVENT)];
 	memset(mask_bytes, 0, sizeof(mask_bytes));
 	XISetMask(mask_bytes, XI_RawMotion);
+	XISetMask(mask_bytes, XI_RawKeyPress);
+	XISetMask(mask_bytes, XI_RawTouchBegin);
+	XISetMask(mask_bytes, XI_RawTouchEnd);
+	XISetMask(mask_bytes, XI_RawTouchUpdate);
 
 	XIEventMask mask;
 	mask.deviceid = XIAllMasterDevices;
@@ -323,9 +368,12 @@ setup(void)
 }
 
 void
-quit(int unused)
+show_cursor(void)
 {
-	running = 0;
+	if (!banish || !cursor_hidden)
+		return;
+	XFixesShowCursor(dpy, root);
+	cursor_hidden = 0;
 }
 
 void
@@ -344,6 +392,8 @@ usage(void)
 	fprintf(stdout, ofmt, "-x", "enable cursor wrapping on the x-axis");
 	fprintf(stdout, ofmt, "-y", "enable cursor wrapping on the y-axis");
 	fprintf(stdout, ofmt, "-s", "snap only, disables wrapping across outer screen edges");
+	fprintf(stdout, ofmt, "-b", "banish (hide) mouse cursor while typing");
+
 
 
 	fprintf(stdout, "\nBy default cursor wrapping is enabled on both x and y axes.\n");
@@ -420,6 +470,8 @@ main(int argc, char *argv[])
 			wrap_y = 1;
 		} else if (arg("-s") || arg("--snap-only")) {
 			snap_only = 1;
+		} else if (arg("-b") || arg("--banish")) {
+			banish = 1;
 		} else if (arg("-f") || arg("--fork")) {
 			if (fork() != 0)
 				exit(EXIT_SUCCESS);
