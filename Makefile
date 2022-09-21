@@ -21,7 +21,7 @@ encircle: ${OBJ}
 	${CC} -o $@ ${OBJ} ${LDFLAGS}
 
 clean:
-	rm -f encircle encircle-${VERSION}.tar.gz
+	rm -f encircle ${OBJ} encircle-${VERSION}.tar.gz
 
 dist: clean
 	mkdir -p encircle-${VERSION}
