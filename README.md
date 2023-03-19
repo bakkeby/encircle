@@ -56,7 +56,7 @@ This is also available in the [AUR](https://aur.archlinux.org/packages/encircle)
 - libxi
 
 ```sh
-sudo pacman -S base-devel libXinerama-devel libxi
+sudo pacman -S base-devel extra/libxinerama libxi
 ```
 
 ### Debian
