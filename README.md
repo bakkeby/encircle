@@ -54,9 +54,10 @@ This is also available in the [AUR](https://aur.archlinux.org/packages/encircle)
 - base-devel
 - extra/libxinerama
 - libxi
+- libxfixes
 
 ```sh
-sudo pacman -S base-devel extra/libxinerama libxi
+sudo pacman -S base-devel extra/libxinerama libxi libxfixes
 ```
 
 ### Debian
@@ -64,9 +65,10 @@ sudo pacman -S base-devel extra/libxinerama libxi
 - build-essential
 - libxinerama-dev
 - libxi-dev
+- libxfixes-dev
 
 ```sh
-sudo apt install build-essential libxinerama-dev libxi-dev
+sudo apt install build-essential libxinerama-dev libxi-dev libxfixes-dev
 ```
 
 ### Void
@@ -74,16 +76,18 @@ sudo apt install build-essential libxinerama-dev libxi-dev
 - base-devel
 - libXinerama-devel
 - libXi-devel
+- libXfixes-devel
 
 ```sh
-xbps-install -Su base-devel libXinerama-devel libXi-devel
+xbps-install -Su base-devel libXinerama-devel libXi-devel libXfixes-devel
 ```
 
 ## Credits
 
 This work is largely derived from the [dwm](https://dwm.suckless.org/) window manager in relation
 to its handling of monitors in a Xinerama setup. The work is inspired by
-[xoop](https://mcol.xyz/code/xoop/) and [taralli](https://github.com/kmcallister/taralli).
+[xoop](https://mcol.xyz/code/xoop/) and [taralli](https://github.com/kmcallister/taralli) and
++[xbanish](https://github.com/jcs/xbanish).
 
 ## License
 

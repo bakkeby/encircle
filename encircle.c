@@ -8,6 +8,7 @@
 #include <limits.h>
 #include <unistd.h>
 #include <X11/X.h>
+#include <X11/extensions/Xfixes.h>
 #include <X11/extensions/XInput2.h>
 #ifdef XINERAMA
 #include <X11/extensions/Xinerama.h>
@@ -41,12 +42,16 @@ static Monitor *below(Monitor *m, int x);
 static Monitor *rightof(Monitor *m, int y);
 static Monitor *recttomon(int x, int y, int w, int h);
 static void genericevent(XEvent *e);
+static int getrootptr(int *x, int *y);
+static void hide_cursor(void);
 #ifdef XINERAMA
 static int isuniquegeom(XineramaScreenInfo *unique, size_t n, XineramaScreenInfo *info);
 #endif /* XINERAMA */
+static void rawmotion(XEvent *e);
 static void run(void);
 static void quit(int unused);
 static void setup(void);
+static void show_cursor(void);
 static void updategeom(int width, int height);
 static void usage(void);
 
@@ -56,6 +61,8 @@ static int wrap_y = 0; /* allow monitor wrap on the y-axis */
 static int snap_x = 0; /* allow cursor snapping along hard x edges */
 static int snap_y = 0; /* allow cursor snapping along hard y edges */
 static int snap_offset = 10; /* snap offset, the number of pixels to shift cursor when snapping */
+static int banish = 0; /* hide cursor while typing */
+static int cursor_hidden = 0;
 static int px, py; /* previous cursor x and y position */
 static int screen;
 static int xi_opcode;
@@ -70,6 +77,7 @@ static void (*handler[LASTEvent]) (XEvent *) = {
 void
 cleanup(void)
 {
+	show_cursor();
 	while (mons)
 		cleanupmon(mons);
 }
@@ -103,72 +111,45 @@ configurenotify(XEvent *e)
 void
 genericevent(XEvent *e)
 {
-	int x, y, dx, dy, nx, ny, sx, sy;
-	int di;
-	unsigned int dui;
-	Window dummy;
-	Monitor *m = NULL, *o;
-
 	if (e->xcookie.extension != xi_opcode)
 		return;
 
 	if (!XGetEventData(dpy, &e->xcookie))
 		return;
 
-	/* On each RawMotion event, retrieve the pointer location and move the pointer if necessary. */
-	if (e->xcookie.evtype != XI_RawMotion)
-		goto bail;
-
-	if (!XQueryPointer(dpy, root, &dummy, &dummy, &x, &y, &di, &di, &dui))
-		goto bail;
-
-	if (!(o = recttomon(x, y, 1, 1)))
-		goto bail;
-
-	dx = x - px;
-	dy = y - py;
-	nx = x;
-	ny = y;
-
-	if (y == o->my && dy < 0) {
-		if ((wrap_y || snap_y) && (m = above(o, x)))
-			ny = m->my + m->mh - 2;
-	} else if (y == o->my + o->mh - 1 && dy > 0) {
-		if ((wrap_y || snap_y) && (m = below(o, x)))
-			ny = m->my + 1;
-	} else if (x == o->mx && dx < 0) {
-		if ((wrap_x || snap_x) && (m = leftof(o, y)))
-			nx = m->mx + m->mw - 2;
-	} else if (x == o->mx + o->mw - 1 && dx > 0) {
-		if ((wrap_x || snap_x) && (m = rightof(o, y)))
-			nx = m->mx + 1;
+	switch (e->xcookie.evtype) {
+	case XI_RawMotion:
+		show_cursor();
+		rawmotion(e);
+		break;
+	case XI_RawTouchBegin:
+	case XI_RawTouchEnd:
+	case XI_RawTouchUpdate:
+	case XI_RawKeyPress:
+		hide_cursor();
+		break;
 	}
 
-	if (nx != x || ny != y) {
-		/* Snap cursor to nearest screen edge if not immediately adjacent */
-		if (m != o && ny != y) {
-			sx = SNAP(nx, m->mx, m->mw);
-			/* Hard edge unless snapping on y-axis enabled */
-			if (sx != nx && !snap_y && abs(ny - y) <= abs(dy))
-				goto bail;
-			nx = sx;
-		}
-		if (m != o && nx != x) {
-			sy = SNAP(ny, m->my, m->mh);
-			/* Hard edge unless snapping on x-axis enabled */
-			if (sy != ny && !snap_x && abs(nx - x) <= abs(dx))
-				goto bail;
-			ny = sy;
-		}
-
-		XWarpPointer(dpy, None, root, 0, 0, 0, 0, nx, ny);
-	}
-
-	px = nx;
-	py = ny;
-
-bail:
 	XFreeEventData(dpy, &e->xcookie);
+}
+
+int
+getrootptr(int *x, int *y)
+{
+    int di;
+    unsigned int dui;
+    Window dummy;
+
+    return XQueryPointer(dpy, root, &dummy, &dummy, x, y, &di, &di, &dui);
+}
+
+void
+hide_cursor(void)
+{
+	if (!banish || cursor_hidden)
+		return;
+	XFixesHideCursor(dpy, root);
+	cursor_hidden = 1;
 }
 
 Monitor *
@@ -270,15 +251,73 @@ isuniquegeom(XineramaScreenInfo *unique, size_t n, XineramaScreenInfo *info)
 #endif /* XINERAMA */
 
 void
+rawmotion(XEvent *e)
+{
+	int x, y, dx, dy, nx, ny, sx, sy;
+	Monitor *m = NULL, *o;
+
+	if (!getrootptr(&x, &y))
+		return;
+
+	if (!(o = recttomon(x, y, 1, 1)))
+		return;
+
+	dx = x - px;
+	dy = y - py;
+	nx = x;
+	ny = y;
+
+	if (y == o->my && dy < 0) {
+		if ((wrap_y || snap_y) && (m = above(o, x)))
+			ny = m->my + m->mh - 2;
+	} else if (y == o->my + o->mh - 1 && dy > 0) {
+		if ((wrap_y || snap_y) && (m = below(o, x)))
+			ny = m->my + 1;
+	} else if (x == o->mx && dx < 0) {
+		if ((wrap_x || snap_x) && (m = leftof(o, y)))
+			nx = m->mx + m->mw - 2;
+	} else if (x == o->mx + o->mw - 1 && dx > 0) {
+		if ((wrap_x || snap_x) && (m = rightof(o, y)))
+			nx = m->mx + 1;
+	}
+
+	if (nx != x || ny != y) {
+		/* Snap cursor to nearest screen edge if not immediately adjacent */
+		if (m != o && ny != y) {
+			sx = SNAP(nx, m->mx, m->mw);
+			/* Hard edge unless snapping on y-axis enabled */
+			if (sx != nx && !snap_y && abs(ny - y) <= abs(dy))
+				return;
+			nx = sx;
+		}
+		if (m != o && nx != x) {
+			sy = SNAP(ny, m->my, m->mh);
+			/* Hard edge unless snapping on x-axis enabled */
+			if (sy != ny && !snap_x && abs(nx - x) <= abs(dx))
+				return;
+			ny = sy;
+		}
+
+		XWarpPointer(dpy, None, root, 0, 0, 0, 0, nx, ny);
+	}
+
+	px = nx;
+	py = ny;
+}
+
+void
 run(void)
 {
 	XEvent ev;
 
-	/* Tell XInput to send us all RawMotion events.
-	 * (Normal Motion events are blocked by some windows.) */
-	unsigned char mask_bytes[XIMaskLen(XI_RawMotion)];
+	/* Tell XInput to send us all RawMotion events. */
+	unsigned char mask_bytes[XIMaskLen(XI_LASTEVENT)];
 	memset(mask_bytes, 0, sizeof(mask_bytes));
 	XISetMask(mask_bytes, XI_RawMotion);
+	XISetMask(mask_bytes, XI_RawKeyPress);
+	XISetMask(mask_bytes, XI_RawTouchBegin);
+	XISetMask(mask_bytes, XI_RawTouchEnd);
+	XISetMask(mask_bytes, XI_RawTouchUpdate);
 
 	XIEventMask mask;
 	mask.deviceid = XIAllMasterDevices;
@@ -336,6 +375,15 @@ setup(void)
 }
 
 void
+show_cursor(void)
+{
+	if (!banish || !cursor_hidden)
+		return;
+	XFixesShowCursor(dpy, root);
+	cursor_hidden = 0;
+}
+
+void
 quit(int unused)
 {
 	running = 0;
@@ -359,6 +407,7 @@ usage(void)
 	fprintf(stdout, ofmt, "-s", "snap, enables snapping across inner hard edges");
 	fprintf(stdout, ofmt, "-sx", "as above, but only on the x-axis");
 	fprintf(stdout, ofmt, "-sy", "as above, but only on the y-axis");
+	fprintf(stdout, ofmt, "-b", "banish (hide) mouse cursor while typing");
 
 	fprintf(stdout, "\nBy default cursor snapping and wrapping is enabled on both x and y axes.\n");
 	fprintf(stdout, "\nSee the man page for more details.\n\n");
@@ -439,6 +488,8 @@ main(int argc, char *argv[])
 			snap_x = 1;
 		} else if (arg("-sy") || arg("--snapy")) {
 			snap_y = 1;
+		} else if (arg("-b") || arg("--banish")) {
+			banish = 1;
 		} else if (arg("-f") || arg("--fork")) {
 			if (fork() != 0)
 				exit(EXIT_SUCCESS);
