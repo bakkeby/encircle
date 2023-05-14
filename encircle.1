@@ -13,10 +13,11 @@ In practice what this means is that the screen area is turned into a flat
 torus in that when the cursor hits a screen edge then it will continue and
 reappear on the opposite edge.
 
-If the cursor position is not within the target screen then the cursor will
-snap to the nearest edge of that screen.
+If snap is enabled and the cursor position is not within the target screen
+then the cursor will snap to the nearest edge of that screen.
 
-By default cursor wrapping is enabled on both horizontal and vertical axes.
+By default cursor snapping and wrapping is enabled on both horizontal and
+vertical axes.
 
    ┌───────┐
    │     1┄┤
@@ -44,21 +45,25 @@ notified of that and update monitor positions and dimensions accordingly.
 .B \-h
 prints help output
 .TP
-.B \-v
+.B \-v, \-\-version
 prints version information and exits
 .TP
-.B \-f
+.B \-f, \-\-fork
 fork the process run in the background
 .TP
-.B \-x
+.B \-x, \-\-wrapx
 enable cursor wrapping on the x-axis
 .TP
-.B \-y
+.B \-y, \-\-wrapy
 enable cursor wrapping on the y-axis
 .TP
-.B \-s
-snap only - disables wrapping across outer screen edges
+.B \-s, \-\-snap
+snap - enables cursor snapping to the nearest screen edge
 .P
-In the aforementioned example this would disable transition 2) and 4), leaving only
-the transitions that are internal within the screen area. This can be useful if the
-snapping behaviour to avoid hard edges is desired, but cursor wrapping is not.
+In the aforementioned example this would enable transition 1) and 3)
+.TP
+.B \-sx, \-\-snapx
+As \-s, but only enable snapping on the x-axis
+.TP
+.B \-sy, \-\-snapy
+As \-s, but only enable snapping on the y-axis

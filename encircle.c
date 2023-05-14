@@ -37,8 +37,8 @@ static void configurenotify(XEvent *e);
 static Monitor *createmon(void);
 static Monitor *leftof(Monitor *m, int y);
 static Monitor *above(Monitor *m, int x);
-static Monitor *rightof(Monitor *m, int y);
 static Monitor *below(Monitor *m, int x);
+static Monitor *rightof(Monitor *m, int y);
 static Monitor *recttomon(int x, int y, int w, int h);
 static void genericevent(XEvent *e);
 #ifdef XINERAMA
@@ -53,7 +53,8 @@ static void usage(void);
 static volatile int running = 1;
 static int wrap_x = 0; /* allow monitor wrap on the x-axis */
 static int wrap_y = 0; /* allow monitor wrap on the y-axis */
-static int snap_only = 0;
+static int snap_x = 0; /* allow cursor snapping along hard x edges */
+static int snap_y = 0; /* allow cursor snapping along hard y edges */
 static int snap_offset = 10; /* snap offset, the number of pixels to shift cursor when snapping */
 static int px, py; /* previous cursor x and y position */
 static int screen;
@@ -102,7 +103,7 @@ configurenotify(XEvent *e)
 void
 genericevent(XEvent *e)
 {
-	int x, y, dx, dy, nx, ny;
+	int x, y, dx, dy, nx, ny, sx, sy;
 	int di;
 	unsigned int dui;
 	Window dummy;
@@ -130,24 +131,36 @@ genericevent(XEvent *e)
 	ny = y;
 
 	if (y == o->my && dy < 0) {
-		if (wrap_y && (m = above(o, x)))
+		if ((wrap_y || snap_y) && (m = above(o, x)))
 			ny = m->my + m->mh - 2;
 	} else if (y == o->my + o->mh - 1 && dy > 0) {
-		if (wrap_y && (m = below(o, x)))
+		if ((wrap_y || snap_y) && (m = below(o, x)))
 			ny = m->my + 1;
 	} else if (x == o->mx && dx < 0) {
-		if (wrap_x && (m = leftof(o, y)))
+		if ((wrap_x || snap_x) && (m = leftof(o, y)))
 			nx = m->mx + m->mw - 2;
 	} else if (x == o->mx + o->mw - 1 && dx > 0) {
-		if (wrap_x && (m = rightof(o, y)))
+		if ((wrap_x || snap_x) && (m = rightof(o, y)))
 			nx = m->mx + 1;
 	}
 
 	if (nx != x || ny != y) {
-		if (m != o && nx == x)
-			nx = SNAP(x, m->mx, m->mw);
-		if (m != o && ny == y)
-			ny = SNAP(y, m->my, m->mh);
+		/* Snap cursor to nearest screen edge if not immediately adjacent */
+		if (m != o && ny != y) {
+			sx = SNAP(nx, m->mx, m->mw);
+			/* Hard edge unless snapping on y-axis enabled */
+			if (sx != nx && !snap_y && abs(ny - y) <= abs(dy))
+				goto bail;
+			nx = sx;
+		}
+		if (m != o && nx != x) {
+			sy = SNAP(ny, m->my, m->mh);
+			/* Hard edge unless snapping on x-axis enabled */
+			if (sy != ny && !snap_x && abs(nx - x) <= abs(dx))
+				goto bail;
+			ny = sy;
+		}
+
 		XWarpPointer(dpy, None, root, 0, 0, 0, 0, nx, ny);
 	}
 
@@ -168,7 +181,7 @@ above(Monitor *o, int x)
 		if (m->my + m->mh == o->my && XINTERSECT(m->mx, m->mw, o))
 			return BETWEEN(x, m->mx, m->mx + m->mw) ? NULL : m;
 
-	for (m = mons; m && !snap_only; m = m->next) {
+	for (m = mons; m && wrap_y; m = m->next) {
 		if (m->my >= max_y && XINTERSECT(m->mx, m->mw, o)) {
 			r = m;
 			max_y = r->my;
@@ -188,7 +201,7 @@ below(Monitor *o, int x)
 		if (m->my == o->my + o->mh && XINTERSECT(m->mx, m->mw, o))
 			return BETWEEN(x, m->mx, m->mx + m->mw) ? NULL : m;
 
-	for (m = mons; m && !snap_only; m = m->next) {
+	for (m = mons; m && wrap_y; m = m->next) {
 		if (m->my <= min_y && XINTERSECT(m->mx, m->mw, o)) {
 			r = m;
 			min_y = r->my;
@@ -208,7 +221,7 @@ leftof(Monitor *o, int y)
 		if (m->mx + m->mw == o->mx && YINTERSECT(m->my, m->mh, o))
 			return BETWEEN(y, m->my, m->my + m->mh) ? NULL : m;
 
-	for (m = mons; m && !snap_only; m = m->next) {
+	for (m = mons; m && wrap_x; m = m->next) {
 		if (m->mx >= max_x && YINTERSECT(m->my, m->mh, o)) {
 			r = m;
 			max_x = r->mx;
@@ -228,7 +241,7 @@ rightof(Monitor *o, int y)
 		if (m->mx == o->mx + o->mw && YINTERSECT(m->my, m->mh, o))
 			return BETWEEN(y, m->my, m->my + m->mh) ? NULL : m;
 
-	for (m = mons; m && !snap_only; m = m->next) {
+	for (m = mons; m && wrap_x; m = m->next) {
 		if (m->mx <= min_x && YINTERSECT(m->my, m->mh, o)) {
 			r = m;
 			min_x = r->mx;
@@ -343,10 +356,11 @@ usage(void)
 	fprintf(stdout, ofmt, "-f", "fork the process (i.e run in the background)");
 	fprintf(stdout, ofmt, "-x", "enable cursor wrapping on the x-axis");
 	fprintf(stdout, ofmt, "-y", "enable cursor wrapping on the y-axis");
-	fprintf(stdout, ofmt, "-s", "snap only, disables wrapping across outer screen edges");
+	fprintf(stdout, ofmt, "-s", "snap, enables snapping across inner hard edges");
+	fprintf(stdout, ofmt, "-sx", "as above, but only on the x-axis");
+	fprintf(stdout, ofmt, "-sy", "as above, but only on the y-axis");
 
-
-	fprintf(stdout, "\nBy default cursor wrapping is enabled on both x and y axes.\n");
+	fprintf(stdout, "\nBy default cursor snapping and wrapping is enabled on both x and y axes.\n");
 	fprintf(stdout, "\nSee the man page for more details.\n\n");
 	exit(0);
 }
@@ -411,15 +425,20 @@ main(int argc, char *argv[])
 	int junk, i;
 
 	for (i = 1; i < argc; i++) {
-		if (arg("-v") || arg("--version")) { /* prints version information */
+		if (arg("-v") || arg("--version")) {
 			puts("encircle-"VERSION);
 			exit(0);
-		} else if arg("-x") { /* wrap on x-axis only */
+		} else if (arg("-x") || arg("--wrapx")) {
 			wrap_x = 1;
-		} else if arg("-y") { /* wrap on y-axis only */
+		} else if (arg("-y") || arg("--wrapy")) {
 			wrap_y = 1;
-		} else if (arg("-s") || arg("--snap-only")) {
-			snap_only = 1;
+		} else if (arg("-s") || arg("--snap")) {
+			snap_x = 1;
+			snap_y = 1;
+		} else if (arg("-sx") || arg("--snapx")) {
+			snap_x = 1;
+		} else if (arg("-sy") || arg("--snapy")) {
+			snap_y = 1;
 		} else if (arg("-f") || arg("--fork")) {
 			if (fork() != 0)
 				exit(EXIT_SUCCESS);
@@ -431,9 +450,12 @@ main(int argc, char *argv[])
 		}
 	}
 
-	if (!wrap_x && !wrap_y) {
+	/* By default enable snapping and wrapping on x and y axis if not specified by arguments */
+	if (!wrap_x && !wrap_y && !snap_x && !snap_y) {
 		wrap_x = 1;
 		wrap_y = 1;
+		snap_x = 1;
+		snap_y = 1;
 	}
 
 	if (!(dpy = XOpenDisplay(NULL)))
